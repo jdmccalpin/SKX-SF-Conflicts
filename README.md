@@ -30,59 +30,53 @@ of Snoop Filter Conflicts on Intel Xeon Scalable processors (a.k.a., Skylake Xeo
 This outline lists the major operations executed by the **SnoopFilterMapper** code
 
 1.  Allocates a 2GiB array
- *  Options for 1GiB pages (#ifdef MYHUGEPAGE\_1GB) or pre-allocated 2MiB pages (default) or 2MiB Transparent Huge Pages (#ifdef MYHUGEPAGE_THP).
+    *  Options for 1GiB pages (#ifdef MYHUGEPAGE\_1GB) or pre-allocated 2MiB pages (default) or 2MiB Transparent Huge Pages (#ifdef MYHUGEPAGE_THP).
 1.  Initialize/instantiate full 2GiB array.
-1.  Grab the physical addresses of each page in the array (either 2 values or 2048 values)
-   and save in an array.
+1.  Grab the physical addresses of each page in the array (either 2 values or 2048 values) and save in an array.
 1.  Check CPUID to see if the processor model is correct.
 1.  Optionally prepare to use the IMC counters (#ifdef IMC\_COUNTS)
- 1.  mmap /dev/mem and check for the correct SKX VID/DID for bus 0, device 5, function 0
+    1.  mmap /dev/mem and check for the correct SKX VID/DID for bus 0, device 5, function 0
 1.  Optionally set up the CHA counters (#ifdef CHA\_COUNTS)
- 1.  open one /dev/cpu/\*/msr device in each socket
- 1.  read and print the four programmable core performance counters for the core in socket 0
- 1.  program the counters and filter in each of the CHAs (NUM\_CHA\_USED is hardcoded)
+    1.  open one /dev/cpu/\*/msr device in each socket
+    1.  read and print the four programmable core performance counters for the core in socket 0
+    1.  program the counters and filter in each of the CHAs (NUM\_CHA\_USED is hardcoded)
 1.  Optionally program the IMC counters (#ifdef IMC\_COUNTS)
 1.  Optionally determines the mapping of addresses to L3 numbers (#ifdef MAP\_L3)
- 1.  Mostly written for 2MiB pages.
- 1.  For the first PAGES\_MAPPED pages:
-  1.  Check to see if mapping file already exists for the 2MiB page physical address
-  1.  If exists, read the file
-  1.  else, for each cache line
-   1.  Read the L3 counts, access the line many times, read the L3 counts
-   1.  Sanity check results -- if good, store L3 mapping, if bad, repeat.
-  1.  After mapping all lines in the page, write the mapping file for later use.
- 1.  After all pages are mapped, add up the number of lines mapped to each CHA.
-    (Not needed once it is shown that short contiguous ranges cover all the CHAs
-    almost-uniformly.)
-1.  Run an OpenMP parallel "warm-up" loop of AVX512 instructions to try to make sure the
-   cores have spun up the AVX512 units and boosted the cores to the correct frequency.
+    1.  Mostly written for 2MiB pages.
+    1.  For the first PAGES\_MAPPED pages:
+        1.  Check to see if mapping file already exists for the 2MiB page physical address
+        1.  If exists, read the file
+    1.  else, for each cache line
+        1.  Read the L3 counts, access the line many times, read the L3 counts
+    1.  Sanity check results -- if good, store L3 mapping, if bad, repeat.
+    1.  After mapping all lines in the page, write the mapping file for later use.
+    1.  After all pages are mapped, add up the number of lines mapped to each CHA.  (Not needed once it is shown that short contiguous ranges cover all the CHAs almost-uniformly.)
+1.  Run an OpenMP parallel "warm-up" loop of AVX512 instructions to try to make sure the cores have spun up the AVX512 units and boosted the cores to the correct frequency.
 1.  Optionally read the initial values of the IMC counters (#ifdef IMC\_COUNTS)
 1.  Optionally read the initial values of the CHA counters (#ifdef CHA\_COUNTS)
 1.  Code Under Test
- 1.  save start\_tsc() (in OpenMP master thread)
- 1.  First OpenMP loop: 
-  1.  Check core number for each thread using RDTSCP TSC_AUX value 
-   1.  NOTE: implies KMP_AFFINITY="granularity=fine"
-  1.  Read initial values of programmable core counters on each core used.
- 1.  Second OpenMP loop:
-  1.  read initial value of fixed-function counters on each core in use
-  1.  Repeat call to ssum() "inner\_repetitions" times (with individualized
-     array start/stop values per thread).
-  1.  read final value of fixed-function counters on each core in use
-  1.  NOTE: these counter reads are inside the OpenMP barrier, so they
-     can be used to detect load imbalance.
- 1.  Third OpenMP loop:
-  1.  Check core number for each thread using RDTSCP TSC\_AUX value 
-  1.  Read final values of programmable core counters on each core used.
- 1.  save end\_tsc() (in OpenMP master thread)
+    1.  save start\_tsc() (in OpenMP master thread)
+    1.  First OpenMP loop: 
+        1.  Check core number for each thread using RDTSCP TSC_AUX value 
+        1.  NOTE: implies KMP_AFFINITY="granularity=fine"
+    1.  Read initial values of programmable core counters on each core used.
+    1.  Second OpenMP loop:
+        1.  read initial value of fixed-function counters on each core in use
+        1.  Repeat call to ssum() "inner\_repetitions" times (with individualized array start/stop values per thread).
+        1.  read final value of fixed-function counters on each core in use
+        1.  NOTE: these counter reads are inside the OpenMP barrier, so they can be used to detect load imbalance.
+    1.  Third OpenMP loop:
+        1.  Check core number for each thread using RDTSCP TSC\_AUX value 
+        1.  Read final values of programmable core counters on each core used.
+    1.  save end\_tsc() (in OpenMP master thread)
 1.  Optionally read the final values of the CHA counters (#ifdef CHA\_COUNTS)
 1.  Optionally read the final values of the IMC counters (#ifdef IMC\_COUNTS)
 1.  Post-Processing
- 1.  Compute package sums of core counters
- 1.  Optionally compute package sums of CHA counters
- 1.  Optionally compute package sums of IMC counters
- 1.  Compute utilization, average frequency, and IPC for each thread (inside the OpenMP barriers).
- 1.  Compute snoop filter eviction rate (assumes SF EVICTS are in CHA counter 0)
+    1.  Compute package sums of core counters
+    1.  Optionally compute package sums of CHA counters
+    1.  Optionally compute package sums of IMC counters
+    1.  Compute utilization, average frequency, and IPC for each thread (inside the OpenMP barriers).
+    1.  Compute snoop filter eviction rate (assumes SF EVICTS are in CHA counter 0)
 
 ## SF\_Test\_Offsets
 The **SF\_test\_offsets** code is very similar to **SnoopFilterMapper**, but is specialized to run the code under test using contiguous memory at various offsets from the base of each 1GiB page.
