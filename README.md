@@ -99,18 +99,18 @@ The **SF\_test\_offsets** code is very similar to **SnoopFilterMapper**, but is 
       3. L2 Writebacks to L3: LLC\_LOOKUP.DATA\_WRITE (requires CHA\_FILTER0[26:17])
       4. L3 Writebacks to Memory: LLC\_VICTIMS.TOTAL (MESF) (does not count clean victims)
     * The CHA\_FILTER0 in each CHA is programmed to count all L3 lookups (hit or miss, any state), but not to count SF lookups.
-  * IMC\_COUNTS -- if defined, causes the code to program the IMC counters in each DRAM channel to measure four events, and to read these counts before and after the code under test.
-    * This is not required to measure snoop filter conflicts.
-    * With the L2-contained array access kernel, these counters don't provide any useful information, but they are still in the code for historical reasons.
-    * If this variable is defined, more portability checks include:
-      * The file SKX\_IMC\_BusDeviceFunctionOffset.h contains (potentially) machine-specific bus numbers for the PCI configuration space used to access the memory controller performance counters that will need to be checked and/or updated.
-      * The variable `mmconfig_base` is set to 0x80000000 in the main program.  This value is used to map all of PCI configuration space to a local pointer for access to the memory controller performance counters.
-      * The easiest way to find the correct value for your system is `grep MMCONFIG /proc/iomem`
-    * The events are:
-      1. DRAM cache line reads: CAS\_COUNT.READS
-      2. DRAM cache line writes: CAS\_COUNT.WRITES
-      3. DRAM bank "activate" operations: ACT.ALL
-      4. DRAM bank "precharge" operations due to bank conflicts: PRE\_COUNT.MISS
+   * IMC\_COUNTS -- if defined, causes the code to program the IMC counters in each DRAM channel to measure four events, and to read these counts before and after the code under test.
+     * This is not required to measure snoop filter conflicts.
+     * With the L2-contained array access kernel, these counters don't provide any useful information, but they are still in the code for historical reasons.
+     * If this variable is defined, more portability checks include:
+       * The file SKX\_IMC\_BusDeviceFunctionOffset.h contains (potentially) machine-specific bus numbers for the PCI configuration space used to access the memory controller performance counters that will need to be checked and/or updated.
+       * The variable `mmconfig_base` is set to 0x80000000 in the main program.  This value is used to map all of PCI configuration space to a local pointer for access to the memory controller performance counters.
+       * The easiest way to find the correct value for your system is `grep MMCONFIG /proc/iomem`
+     * The events are:
+       1. DRAM cache line reads: CAS\_COUNT.READS
+       2. DRAM cache line writes: CAS\_COUNT.WRITES
+       3. DRAM bank "activate" operations: ACT.ALL
+       4. DRAM bank "precharge" operations due to bank conflicts: PRE\_COUNT.MISS
 2. There are a stupid number of machine-specific defines in the code:
    * The ARRAYSIZE is set to 2GiB by default.
    * Only a fraction of this is typically used for the contiguous, L2-resident array accesses, but the large size allows for two 1 GiB pages or 1024 2 MiB pages.  These large sizes are useful when the code is being used to determine the mapping of physical addresses to L3 slices.
