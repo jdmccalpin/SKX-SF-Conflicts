@@ -137,11 +137,11 @@ The **SF\_test\_offsets** code is very similar to **SnoopFilterMapper**, but is 
    * The code expects the fixed-function and programmable core performance counters to be enabled and configured correctly on each core that is used:
    * IA32\_PERF\_GLOBAL\_CTRL (MSR 0x38f) should be set to 0x70000000f to enable the three fixed-function counters and four programmable counters per core.  (With HyperThreading disabled, setting this MSR to 0x7000000ff enables all eight programmable counters on each core).
    * IA32\_FIXED\_CTR\_CTRL (MSR 0x38d) should be set to 0x333 to enable the three fixed-function counters to count in both user and kernel mode.  This may require disabling the NMI watchdog, which typically uses one of these counters.
-   * The code expects the first four core counters on each core to be programmed to count:
-     1. MEM\_INST\_RETIRED\_ALL\_LOADS (0x004381d0)
-     2. MEM\_LOAD\_RETIRED\_L2_HIT (0x004302d1)
-     3. MEM\_LOAD\_RETIRED\_FB\_HIT (0x004340d1)
-     4. MEM_LOAD_RETIRED_L2_MISS (0x004310d1)
+   * The script "SetupCoreCounters.sh" sets the core counters to a useful set:
+     1. MEM\_INST\_RETIRED.ALL\_LOADS (0x004381d0)
+     2. L1D.REPLACEMENTS (0x00430151)
+     3. L2\_RQSTS.MISS (0x00433f24)
+     4. L2\_LINES\_IN.ALL (0x00431ff1)
    * If CHA\_COUNTS is defined, the code will print out the core performance counter event select registers on core 0, but does not check to see if the values are the expected ones.
 
 

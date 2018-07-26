@@ -1,6 +1,8 @@
 CC = icc
 CFLAGS = -DIMC_COUNTS -DCHA_COUNTS -sox -g -O -xCORE-AVX512
 
+default: SnoopFilterMapper
+
 SnoopFilterMapper.o: SnoopFilterMapper.c
 	icc $(CFLAGS) -qopenmp -c SnoopFilterMapper.c
 
