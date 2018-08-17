@@ -27,7 +27,7 @@ static char const rcsid[] = "$Id: SnoopFilterMapper.c,v 1.11 2018/05/17 22:24:58
 #else
 #define MYPAGESIZE 2097152L
 #define NUMPAGES 1024L
-#define PAGES_MAPPED 12L
+#define PAGES_MAPPED 14L
 #endif
 
 
@@ -50,7 +50,7 @@ uint64_t pageframenumber[NUMPAGES];	// one PFN entry for each page allocated
 # define NUM_IMC_CHANNELS 6			// includes channels on all IMCs in a socket
 # define NUM_IMC_COUNTERS 5			// 0-3 are the 4 programmable counters, 4 is the fixed-function DCLK counter
 # define NUM_CHA_BOXES 28
-# define NUM_CHA_USED 24
+# define NUM_CHA_USED 28
 # define NUM_CHA_COUNTERS 4
 
 long imc_counts[NUM_SOCKETS][NUM_IMC_CHANNELS][NUM_IMC_COUNTERS][2];	// including the fixed-function (DCLK) counter as the final entry
@@ -62,7 +62,7 @@ long cha_counts[NUM_SOCKETS][NUM_CHA_BOXES][NUM_CHA_COUNTERS][2];		// 2 sockets,
 uint32_t cha_perfevtsel[NUM_CHA_COUNTERS];
 long cha_pkg_sums[NUM_SOCKETS][NUM_CHA_COUNTERS];
 
-#define MAXCORES 96
+#define MAXCORES 112
 #define CORES_USED 24
 // New feature -- core counters.
 // upgrade to include counters for all cores 
@@ -125,27 +125,6 @@ uint32_t PCI_cfg_index(unsigned int Bus, unsigned int Device, unsigned int Funct
     return ( index );
 }
 
-// Compute the difference of 48-bit counter values, correcting
-// for a single overflow of the counter if necessary
-long corrected_delta48(int tag, long end, long start)
-{
-    long result;
-	int i;
-    if (end >= start) {
-        result = (long) (end - start);
-    } else {
-        // result = (long) ((end + (1UL<<48)) - start);
-        result = 0;
-		if (report == 1) {
-			nwraps++;
-			dumpall = 1;
-			i = gettimeofday(&tp,&tzp);
-			printf("DEBUG: wrap detected at %ld.%.6ld tag %d end %ld (0x%lx) start %ld (0x%lx) result %ld (0x%lx)\n",tp.tv_sec,tp.tv_usec,tag,end,end,start,start,result,result);
-		}
-    }
-    return (result);
-}
-
 // ===========================================================================================================================================================================
 int main(int argc, char *argv[])
 {
@@ -154,8 +133,9 @@ int main(int argc, char *argv[])
 	int i;
 	int retries;
 	int zeros;
-	int tag;
 	int rc;
+	int core_pmc_width, fixed_pmc_width;			// these will be looked up using CPUID to use in overflow/wraparound correction
+	int uncore_pmc_width=48;						// all the uncore stuff is model-dependent, but most are 48 bits
 	ssize_t rc64;
 	char description[100];
 	size_t len;
@@ -183,7 +163,7 @@ int main(int argc, char *argv[])
 	double t0, t1;
 	double avg_cycles;
 	unsigned long tsc_start, tsc_end;
-	double tsc_rate = 2.1e9;
+	float TSC_GHz;
 	double sf_evict_rate;
 	double bandwidth;
     unsigned long mmconfig_base=0x80000000;		// DOUBLE-CHECK THIS ON NEW SYSTEMS!!!!!   grep MMCONFIG /proc/iomem | awk -F- '{print $1}'
@@ -191,6 +171,10 @@ int main(int argc, char *argv[])
 	double private_sum,partial_sums[CORES_USED];
 	long iters,iteration_counts[CORES_USED];
 	long BaseOffset;
+
+	TSC_GHz = get_TSC_frequency()/1.0e9;
+	core_pmc_width = get_core_counter_width();
+	fixed_pmc_width = get_fixed_counter_width();
 
 	BaseOffset = 0;
 #ifdef RANDOMOFFSETS
@@ -811,6 +795,8 @@ int main(int argc, char *argv[])
 	printf("VERBOSE: L3 Mapping Complete in %ld tries for %d cache lines ratio %f\n",totaltries,32768*PAGES_MAPPED,(double)totaltries/(double)(32768*PAGES_MAPPED));
 
 #ifndef MYHUGEPAGE_1GB
+	// TODO!!  Fix this so that it is not hard-coded for the 24-core case!!!!
+	//
 	// now that the mapping is complete, I can add up the number of lines mapped to each CHA
 	// be careful to count only the lines that are used, not the full 24MiB
 	// 3 million elements is ~11.44 2MiB pages, so count all lines in each of the first 11 pages
@@ -878,7 +864,7 @@ int main(int argc, char *argv[])
 
 // =================== BEGINNING OF PERFORMANCE COUNTER READS BEFORE KERNEL TESTING ==============================
 #ifdef IMC_COUNTS
-	// read the initial values of the IMC counters
+	// ------------ read the initial values of the IMC counters ------------
     for (socket=0; socket<NUM_SOCKETS; socket++) {
         bus = IMC_BUS_Socket[socket];
         for (channel=0; channel<NUM_IMC_CHANNELS; channel++) {
@@ -922,7 +908,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef CHA_COUNTS
-	// read the initial values of the CHA mesh counters
+	// ------------ read the initial values of the CHA mesh counters ------------
 	for (pkg=0; pkg<2; pkg++) {
 		for (tile=0; tile<NUM_CHA_USED; tile++) {
 			for (counter=0; counter<4; counter++) {
@@ -944,20 +930,22 @@ int main(int argc, char *argv[])
 #endif
 #endif
 
-	// ===================================== CODE TO TEST BEGINS HERE =======================================================================
-
-	tsc_start = rdtsc();
+	// ------------ read the initial values of the programmable core counters ------------
 
 #pragma omp parallel for private(counter)
 	for (i=0; i<CORES_USED; i++) {
+#ifdef CHECK_THREAD_LOCATION
 		if (get_core_number() != stride*i) {
 			printf("ERROR: thread %d is in the wrong place %d\n",i,get_core_number());
 		}
+#endif
 		for (counter=0; counter<4; counter++) {
 			core_counters[i][counter][0] = rdpmc(counter);
 		}
 	}
 
+	tsc_start = rdtsc();
+	// ================= CODE UNDER TEST BEGINS HERE ====================
 
 #ifdef SIMPLE_OMP_LOOP
 	sum = 0.0;
@@ -987,20 +975,24 @@ int main(int argc, char *argv[])
 		iteration_counts[i] = iters;
 	}
 #endif
+	// ================ CODE UNDER TEST ENDS HERE ====================
+	tsc_end = rdtsc();
+
+	// use the partial sums so the optimizer will not eliminate code
 	for (i=0; i<CORES_USED; i++) {
 		sum += partial_sums[i];
 	}
 
+	// -------------------- read the final values of the Programmable Core counters ------------------------ 
 #pragma omp parallel for private(counter)
 	for (i=0; i<CORES_USED; i++) {
+#ifdef CHECK_THREAD_LOCATION
 		if (get_core_number() != stride*i) {
 			printf("ERROR: thread %d is in the wrong place %d\n",i,get_core_number());
 		}
+#endif
 		for (counter=0; counter<4; counter++) {
 			core_counters[i][counter][1] = rdpmc(counter);
-			if (core_counters[i][counter][1] == SPECIAL_VALUE) {
-				printf("BADNESS: SPECIAL_VALUE value returned on thread %d counter %d\n",i,counter);
-			}
 #ifdef RETRIES
 			// if the counter returns zero, read it one more time....
 			if (core_counters[i][counter][1] == SPECIAL_VALUE) {
@@ -1011,8 +1003,8 @@ int main(int argc, char *argv[])
 #endif
 		}
 	}
-	tsc_end = rdtsc();
 
+#ifdef CHECK_SPECIAL_VALUES
 	for (i=0; i<CORES_USED; i++) {
 		for (counter=0; counter<4; counter++) {
 			if (core_counters[i][counter][0] == SPECIAL_VALUE) {
@@ -1025,10 +1017,10 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
+#endif
 
-// ===================================== END OF CODE UNDER TEST  ========================================================
 #ifdef CHA_COUNTS
-	// read the final values of the CHA mesh counters
+	// ------------------- read the final values of the CHA mesh counters ----------------
 	for (pkg=0; pkg<2; pkg++) {
 		for (tile=0; tile<NUM_CHA_USED; tile++) {
 			for (counter=0; counter<4; counter++) {
@@ -1041,6 +1033,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef IMC_COUNTS
+	// ------------------ read the final values of the IMC counters -----------------
 	for (socket=0; socket<NUM_SOCKETS; socket++) {
 		bus = IMC_BUS_Socket[socket];
 		for (channel=0; channel<NUM_IMC_CHANNELS; channel++) {
@@ -1073,7 +1066,7 @@ int main(int argc, char *argv[])
 // ================================== END OF PERFORMANCE COUNTER READS AFTER TEST  ==============================================
 
 	t0 = 0.0;
-	t1 = (double) (tsc_end - tsc_start) / tsc_rate;
+	t1 = (double) (tsc_end - tsc_start) / TSC_GHz / 1.0e9;
 	printf("Instrumented code required %f seconds to execute\n",t1-t0);
 	bandwidth = sizeof(double)*(double)l2_contained_size*(double)inner_repetitions / (t1-t0) / 1e9;
 	printf("Bandwidth %f GB/s\n",bandwidth);
@@ -1097,19 +1090,19 @@ int main(int argc, char *argv[])
 	// compute core package sums and optional print
 	for (i=0; i<CORES_USED; i++) {
 		for (counter=0; counter<4; counter++) {
-			tag = 10*i + counter;
-			delta = corrected_delta48(tag,fixed_counters[i][counter][1],fixed_counters[i][counter][0]);
+			delta = corrected_pmc_delta(fixed_counters[i][counter][1],fixed_counters[i][counter][0],fixed_pmc_width);
 			fixed_pkg_sums[0][counter] += delta;
 		}
 		for (counter=0; counter<4; counter++) {
-			tag = 1000 + 10*i + counter;
+#ifdef CHECK_SPECIAL_VALUES
 			if (core_counters[i][counter][0] == SPECIAL_VALUE) {
 				printf("DEBUG: SPECIAL_VALUE found in post-processing in start count on thread %d counter %d\n",i,counter);
 			}
 			if (core_counters[i][counter][1] == SPECIAL_VALUE) {
 				printf("DEBUG: SPECIAL_VALUE found in post-processing in end count on thread %d counter %d\n",i,counter);
 			}
-			delta = corrected_delta48(tag,core_counters[i][counter][1],core_counters[i][counter][0]);
+#endif
+			delta = corrected_pmc_delta(core_counters[i][counter][1],core_counters[i][counter][0],core_pmc_width);
 #ifdef VERBOSE
 			printf("CORE %d counter %d end %ld start %ld delta %ld\n",i,counter,core_counters[i][counter][1],core_counters[i][counter][0],delta);
 #endif
@@ -1123,7 +1116,7 @@ int main(int argc, char *argv[])
 		report = 0;
 		for (i=0; i<CORES_USED; i++) {
 			for (counter=0; counter<4; counter++) {
-				delta = corrected_delta48(tag,core_counters[i][counter][1],core_counters[i][counter][0]);
+				delta = corrected_pmc_delta(core_counters[i][counter][1],core_counters[i][counter][0],core_pmc_width);
 				printf("CORE %d counter %d end %ld start %ld delta %ld\n",i,counter,core_counters[i][counter][1],core_counters[i][counter][0],delta);
 			}
 		}
@@ -1136,8 +1129,7 @@ int main(int argc, char *argv[])
 	for (pkg=0; pkg<2; pkg++) {
 		for (tile=0; tile<NUM_CHA_USED; tile++) {
 			for (counter=0; counter<4; counter++) {
-				tag = 2000 + 10*tile + counter;
-				delta = corrected_delta48(tag,cha_counts[pkg][tile][counter][1],cha_counts[pkg][tile][counter][0]);
+				delta = corrected_pmc_delta(cha_counts[pkg][tile][counter][1],cha_counts[pkg][tile][counter][0],uncore_pmc_width);
 #ifdef VERBOSE
 				printf("CHA pkg %d tile %d counter %d delta %ld\n",pkg,tile,counter,delta);
 #endif
@@ -1150,8 +1142,7 @@ int main(int argc, char *argv[])
 	for (pkg=0; pkg<2; pkg++) {
 		for (channel=0; channel<NUM_IMC_CHANNELS; channel++) {
 			for (counter=0; counter<NUM_IMC_COUNTERS; counter++) {
-				tag = 3000 + 10*channel + counter;
-				delta = corrected_delta48(tag,imc_counts[pkg][channel][counter][1],imc_counts[pkg][channel][counter][0]);
+				delta = corrected_pmc_delta(imc_counts[pkg][channel][counter][1],imc_counts[pkg][channel][counter][0],uncore_pmc_width);
 #ifdef VERBOSE
 				printf("IMC pkg %d channel %d counter %d delta %ld\n",pkg,channel,counter,delta);
 #endif
@@ -1188,21 +1179,17 @@ int main(int argc, char *argv[])
 
 	printf("CORE_UTILIZATION ");
 	for (i=0; i<CORES_USED; i++) {
-		tag = 0;
-		delta_ref  = corrected_delta48(tag,fixed_counters[i][2][1],fixed_counters[i][2][0]);
-		delta_tsc  = corrected_delta48(tag,fixed_counters[i][3][1],fixed_counters[i][3][0]);
+		delta_ref  = corrected_pmc_delta(fixed_counters[i][2][1],fixed_counters[i][2][0],fixed_pmc_width);
+		delta_tsc  = corrected_pmc_delta(fixed_counters[i][3][1],fixed_counters[i][3][0],fixed_pmc_width);
 		utilization = (double)delta_ref / (double)delta_tsc;
 		printf("%6.4f ",utilization);
 	}
 	printf("\n");
 
-	float TSC_GHz;
-	TSC_GHz = get_TSC_frequency()/1.0e9;
 	printf("CORE_GHZ ");
 	for (i=0; i<CORES_USED; i++) {
-		tag = 0;
-		delta_core = corrected_delta48(tag,fixed_counters[i][1][1],fixed_counters[i][1][0]);
-		delta_ref  = corrected_delta48(tag,fixed_counters[i][2][1],fixed_counters[i][2][0]);
+		delta_core = corrected_pmc_delta(fixed_counters[i][1][1],fixed_counters[i][1][0],fixed_pmc_width);
+		delta_ref  = corrected_pmc_delta(fixed_counters[i][2][1],fixed_counters[i][2][0],fixed_pmc_width);
 		avg_ghz = (double)delta_core / (double)delta_ref * TSC_GHz;
 		printf("%6.4f ",avg_ghz);
 	}
@@ -1210,9 +1197,8 @@ int main(int argc, char *argv[])
 
 	printf("CORE_IPC ");
 	for (i=0; i<CORES_USED; i++) {
-		tag = 0;
-		delta_inst = corrected_delta48(tag,fixed_counters[i][0][1],fixed_counters[i][0][0]);
-		delta_core = corrected_delta48(tag,fixed_counters[i][1][1],fixed_counters[i][1][0]);
+		delta_inst = corrected_pmc_delta(fixed_counters[i][0][1],fixed_counters[i][0][0],fixed_pmc_width);
+		delta_core = corrected_pmc_delta(fixed_counters[i][1][1],fixed_counters[i][1][0],fixed_pmc_width);
 		ipc = (double)delta_inst / (double)delta_core;
 		printf("%6.4f ",ipc);
 	}
@@ -1220,8 +1206,7 @@ int main(int argc, char *argv[])
 
 	printf("THREAD_EXECUTION_TIME ");
 	for (i=0; i<CORES_USED; i++) {
-		tag = 0;
-		delta_tsc  = corrected_delta48(tag,fixed_counters[i][3][1],fixed_counters[i][3][0]);
+		delta_tsc  = corrected_pmc_delta(fixed_counters[i][3][1],fixed_counters[i][3][0],fixed_pmc_width);
 		t0 = (double)delta_tsc / (TSC_GHz*1.0e9);
 		printf("%f ",t0);
 	}
@@ -1277,7 +1262,7 @@ int main(int argc, char *argv[])
 	for (counter=0; counter<4; counter++) {
 		printf("CORE_counter %d ",counter);
 		for (i=0; i<CORES_USED; i++) {
-			delta = corrected_delta48(tag,core_counters[i][counter][1],core_counters[i][counter][0]);
+			delta = corrected_pmc_delta(core_counters[i][counter][1],core_counters[i][counter][0],core_pmc_width);
 			printf("%ld ",delta);
 		}
 		printf("\n");
@@ -1286,7 +1271,7 @@ int main(int argc, char *argv[])
 	for (counter=0; counter<4; counter++) {
 		printf("CHA_counter %d ",counter);
 		for (i=0; i<NUM_CHA_USED; i++) {
-			delta = corrected_delta48(tag,cha_counts[0][i][counter][1],cha_counts[0][i][counter][0]);
+			delta = corrected_pmc_delta(cha_counts[0][i][counter][1],cha_counts[0][i][counter][0],uncore_pmc_width);
 			printf("%ld ",delta);
 		}
 		printf("\n");
